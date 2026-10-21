@@ -1,0 +1,16 @@
+patient_id,first_name,last_name,dob,phone,insurance_plan,plan_type,pcp_provider_id,preferred_location,authorized_contacts,notes
+PAT-2001,Jonathan,Smith,1964-03-12,312-555-0141,BCBS,PPO,PRV-1009,LAKEVIEW,,
+PAT-2002,Jon,Smith,1964-03-12,312-555-0141,BCBS,PPO,,LAKEVIEW,,possible duplicate of PAT-2001
+PAT-2003,Maria,Delgado,1979-11-02,312-555-0188,Aetna,HMO,PRV-1010,DOWNTOWN,Carlos Delgado (spouse),
+PAT-2004,Arthur,Whitfield,1941-06-28,312-555-0109,Medicare,PPO,PRV-1009,LAKEVIEW,Diane Whitfield (daughter),hard of hearing
+PAT-2005,Keisha,Johnson,1992-01-17,312-555-0177,UnitedHealth,HMO,PRV-1002,OAK PARK,,
+PAT-2006,Liam,O'Connor,2016-09-04,312-555-0152,Medicaid,HMO,PRV-1013,OAK PARK,Siobhan O'Connor (mother),minor
+PAT-2007,Wen,Zhang,1985-05-23,312-555-0163,Cigna,PPO,,DOWNTOWN,,
+PAT-2008,Ruth,Abramowitz,1958-12-09,312-555-0134,BCBS,HMO,PRV-1009,LAKEVIEW,,
+PAT-2009,Diego,Ramos,2009-02-14,312-555-0195,Medicaid,HMO,PRV-1014,DOWNTOWN,Ana Ramos (mother),minor
+PAT-2010,Frances,Okonkwo,1970-08-30,312-555-0126,Aetna,PPO,PRV-1002,OAK PARK,,
+PAT-2011,Peter,Novak,1988-04-11,312-555-0118,,,,DOWNTOWN,,no insurance on file
+PAT-2012,Yuki,Tanaka,1996-07-19,312-555-0172,UnitedHealth,PPO,PRV-1010,DOWNTOWN,,
+PAT-2013,Harold,Byrne,1952-10-05,312-555-0147,Medicare,PPO,PRV-1009,LAKEVIEW,Margaret Byrne (spouse),
+PAT-2014,Amara,Nwosu,1983-03-27,312-555-0159,Cigna,HMO,PRV-1002,OAK PARK,,
+PAT-2015,Sofia,Rossi,2001-12-01,312-555-0183,BCBS,PPO,,LAKEVIEW,,

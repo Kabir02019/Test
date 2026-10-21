@@ -1,0 +1,11 @@
+appointment_id,patient_id,provider_id,slot_id,location,start,status,visit_reason,booked_by
+APT-3001,PAT-2001,PRV-1009,SLT-01520,LAKEVIEW,2026-10-27T09:00,booked,annual physical,front_desk
+APT-3002,PAT-2003,PRV-1001,SLT-00031,LAKEVIEW,2026-10-23T10:30,booked,cardiology follow-up,front_desk
+APT-3003,PAT-2003,PRV-1005,SLT-00712,DOWNTOWN,2026-10-30T14:00,booked,skin check,front_desk
+APT-3004,PAT-2004,PRV-1009,SLT-01544,LAKEVIEW,2026-10-22T08:30,booked,post-hospital follow-up,front_desk
+APT-3005,PAT-2008,PRV-1007,SLT-01011,LAKEVIEW,2026-11-03T11:00,booked,knee pain follow-up,front_desk
+APT-3006,PAT-2013,PRV-1004,SLT-00456,DOWNTOWN,2026-10-26T13:30,booked,post-surgical follow-up,front_desk
+APT-3007,PAT-2006,PRV-1013,SLT-01822,OAK PARK,2026-10-28T15:00,booked,well-child visit,front_desk
+APT-3008,PAT-2012,PRV-1010,SLT-01345,DOWNTOWN,2026-11-05T09:30,booked,annual physical,front_desk
+APT-3009,PAT-2010,PRV-1002,SLT-00289,OAK PARK,2026-10-29T10:00,booked,blood pressure check,front_desk
+APT-3010,PAT-2014,PRV-1002,SLT-00301,OAK PARK,2026-10-22T14:30,booked,follow-up,front_desk

@@ -1,0 +1,17 @@
+provider_id,full_name,specialty,locations,languages,gender,accepting_new_patients,insurance_accepted,notes
+PRV-1001,Anita Patel,Cardiology,LAKEVIEW;DOWNTOWN,English;Gujarati,F,TRUE,"Aetna,BCBS,Cigna,Medicare,UnitedHealth",
+PRV-1002,Raj Patel,Primary Care,OAK PARK,English;Hindi;Gujarati,M,TRUE,"Aetna,BCBS,Cigna,Medicare,Medicaid,UnitedHealth",
+PRV-1003,Susan Kim,cardio,LAKEVIEW,English;Korean,F,FALSE,"Aetna,BCBS,Medicare,UnitedHealth",not taking new pts until Jan
+PRV-1004,Marcus Lee,Cardiology,LAKEVIEW;DOWNTOWN,English,M,TRUE,"Aetna,BCBS,Cigna,Medicare,UnitedHealth",
+PRV-1005,Elena Vasquez,Dermatology,DOWNTOWN,English;Spanish,F,TRUE,"Aetna,BCBS,Cigna,UnitedHealth",
+PRV-1006,David Osei,Dermatology,OAK PARK;DOWNTOWN,English,M,TRUE,"Aetna,BCBS,Medicare,UnitedHealth",
+PRV-1007,Priya Shah,Orthopedics,LAKEVIEW,English;Hindi,F,TRUE,"Aetna,BCBS,Cigna,Medicare,UnitedHealth",
+PRV-1008,Tom Brennan,Orthopaedics,DOWNTOWN,English,M,TRUE,"BCBS,Cigna,Medicare,UnitedHealth",
+PRV-1009,Grace Mbeki,Primary Care,LAKEVIEW;OAK PARK,English;Swahili,F,TRUE,"Aetna,BCBS,Cigna,Medicare,Medicaid,UnitedHealth",
+PRV-1010,Jonathan Reyes,Primary Care,DOWNTOWN,English;Spanish,M,TRUE,"Aetna,BCBS,Cigna,Medicare,Medicaid,UnitedHealth",
+PRV-1011,Laura Chen,OB/GYN,LAKEVIEW;DOWNTOWN,English;Mandarin,F,TRUE,"Aetna,BCBS,Cigna,Medicare,UnitedHealth",
+PRV-1012,Hannah Wolff,OBGYN,OAK PARK,English;German,F,FALSE,"Aetna,BCBS,UnitedHealth",maternity leave from Mar
+PRV-1013,Samuel Adeyemi,Pediatrics,OAK PARK;LAKEVIEW,English;Yoruba,M,TRUE,"Aetna,BCBS,Cigna,Medicare,Medicaid,UnitedHealth",
+PRV-1014,Nora Fitzgerald,Pediatrics,DOWNTOWN,English,F,TRUE,"Aetna,BCBS,Cigna,Medicaid,UnitedHealth",
+PRV-1015,Ibrahim Haddad,Heart,DOWNTOWN,English;Arabic,M,TRUE,"Aetna,BCBS,Medicare,UnitedHealth",
+PRV-1016,Megan Torres,Dermatology,LAKEVIEW,English;Spanish,F,TRUE,,no insurance data on file

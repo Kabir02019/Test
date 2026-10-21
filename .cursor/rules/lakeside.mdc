@@ -1,0 +1,130 @@
+---
+description: Lakeside scheduling voice agent - architecture invariants and code style
+alwaysApply: true
+---
+
+# Project: Lakeside patient scheduling voice agent
+
+This is a live interview build. I have ~2.5 hours and I will be asked to
+explain every line of this code to a panel of engineers afterwards.
+
+## Pipecat version and providers
+
+This project uses pipecat-ai 0.0.108, NOT 1.x. Only use APIs that
+exist in the installed package. Read site-packages to confirm class
+names and constructor arguments before using them. Never suggest
+pipecat 1.x imports or patterns.
+
+LLM is Anthropic. STT and TTS are Deepgram. No Cartesia, no OpenAI.
+
+## The most important rule
+
+Write code I can defend out loud. If there is a clever way and an obvious
+way, write the obvious way. I would rather read 15 lines I understand
+instantly than 5 lines I have to reason about.
+
+Never generate a function I have not asked for. Never add a feature
+"while we're here". If you think something is missing, say so in a
+comment or in chat — do not build it.
+
+## Code style
+
+- Explicit over idiomatic. Full `if` / `else` blocks, not ternaries or
+  one-line comprehensions with conditionals.
+- Descriptive variable names. `matching_providers`, not `mp` or `result`.
+- No list/dict comprehensions longer than one simple clause. Use a loop.
+- No `lambda`. Define a named function.
+- No walrus operator, no `functools.reduce`, no metaclasses, no decorators
+  beyond the ones a framework requires.
+- Early returns for guard clauses are fine and preferred over nesting.
+- Type hints on function signatures. Not on every local variable.
+- Docstring on every public function: one line saying what it does, and a
+  line saying what it returns when that is not obvious.
+- Comments explain WHY, never WHAT. If the what is unclear, rename things.
+
+## Architectural invariants — do not violate these
+
+1. **The LLM never calls a write tool.** On the confirmation stage the
+   model's only job is to return structured output indicating whether the
+   patient confirmed. Python code reads that field and performs the write.
+   `book_appointment`, `reschedule_appointment` and `cancel_appointment`
+   are called from `agent/state_machine.py`, never exposed in a tool
+   schema handed to the model.
+
+2. **Tools are gated by stage.** The tool schemas passed to the model are
+   built per stage from the state machine. The model never sees the full
+   tool list.
+
+3. **The agent core is transport-agnostic.** `agent/core.py` takes text
+   and returns text. It must never import anything from `voice/`. Voice is
+   a front end. I need to be able to run the whole agent from `cli.py`
+   with no audio.
+
+4. **Every write is idempotent.** Writes take an idempotency key generated
+   by code (not the model) from session id + the thing being acted on.
+
+5. **All clinic data access goes through `adapter/`.** No module outside
+   `adapter/` reads a CSV or knows a column name. The adapter is the only
+   place that knows the data is files rather than an EHR.
+
+6. **Normalise on the way in.** Specialty labels in the source data are
+   inconsistent ("cardio", "Heart", "Orthopaedics", "OBGYN"). The adapter
+   maps them to the canonical list from clinic_rules.json. Nothing
+   downstream ever sees a raw label.
+
+7. **Safety is separate code, not a prompt instruction.** Red-flag
+   detection runs on the patient transcript before the agent turn, in
+   `agent/safety.py`, independent of the model. The grounding check runs
+   on agent output before it is spoken.
+
+8. **The agent states no fact that did not come from a tool result in
+   this conversation.** Provider names, dates, times, locations.
+
+## Project layout
+
+Put code where it belongs. Do not create new top-level directories.
+
+    data/                  the clinic's CSV and JSON files, read only
+    adapter/
+      scheduling_adapter.py   loads data, the only module that reads files
+      normalize.py            specialty/location label normalisation
+    agent/
+      core.py                 text in, text out. the agent loop
+      state_machine.py        stages, allowed tools, exit conditions, writes
+      tools.py                tool schemas and implementations
+      safety.py               red flag detection, grounding check
+    voice/
+      pipeline.py             pipecat wiring. imports agent/, never reverse
+    tests/
+      scenarios.py            scripted conversations, assert on outcomes
+    cli.py                    text REPL against agent core
+    README.md
+
+## Tool design rules
+
+- Search tools take every filter as optional. `search_providers` must
+  accept name, specialty, location, language, gender, insurance and
+  accepting_new in any combination. Never force a caller to go through
+  specialty to find a doctor by name.
+- IDs cross tool boundaries, never names. Return provider_id, take
+  provider_id.
+- Return small, ranked results. Never return more than 5 slots.
+- Errors are recovery instructions, not failures. Return
+  "Dr Kim is not accepting new patients; Dr Lee in the same department is"
+  rather than an empty list or an exception.
+
+## Testing
+
+Scripted scenarios in `tests/scenarios.py` run against the agent core in
+text mode. Assert on outcomes — did it book the right slot, did it
+escalate, did it refuse the write — never on exact wording.
+
+## What not to do
+
+- Do not add a web framework, a database, an ORM, or a message queue.
+- Do not add retry/caching/observability libraries. A print statement and
+  a dict are fine for today.
+- Do not write async code unless the framework requires it at that point.
+- Do not catch exceptions broadly to make something pass. Let it fail
+  loudly so I can see it.
+- Do not write a README section about features that do not exist.

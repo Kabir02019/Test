@@ -1,0 +1,81 @@
+{
+  "clinic_name": "Lakeside Medical Group",
+  "locations": {
+    "LAKEVIEW": {
+      "address": "4120 N Lakeview Ave, Chicago, IL 60613",
+      "phone": "312-555-0100",
+      "hours": "Mon-Fri 8:00-17:00"
+    },
+    "DOWNTOWN": {
+      "address": "211 W Madison St, Suite 900, Chicago, IL 60606",
+      "phone": "312-555-0200",
+      "hours": "Mon-Fri 8:00-17:00"
+    },
+    "OAK PARK": {
+      "address": "908 Lake St, Oak Park, IL 60301",
+      "phone": "708-555-0300",
+      "hours": "Mon-Thu 8:00-17:00, Fri 8:00-13:00"
+    }
+  },
+
+  "specialties": [
+    "Primary Care",
+    "Cardiology",
+    "Dermatology",
+    "Orthopedics",
+    "OB/GYN",
+    "Pediatrics"
+  ],
+
+  "eligibility_rules": [
+    {
+      "rule_id": "R1",
+      "description": "HMO patients require a PCP referral before seeing any specialist.",
+      "applies_to_plan_types": ["HMO"],
+      "applies_to_specialties": ["Cardiology", "Dermatology", "Orthopedics", "OB/GYN"]
+    },
+    {
+      "rule_id": "R2",
+      "description": "Pediatrics is for patients under 18 only.",
+      "applies_to_specialties": ["Pediatrics"],
+      "max_age": 17
+    },
+    {
+      "rule_id": "R3",
+      "description": "Patients 18 and over cannot be booked with Pediatrics; route to Primary Care.",
+      "applies_to_specialties": ["Pediatrics"]
+    },
+    {
+      "rule_id": "R4",
+      "description": "A provider can only be booked if they accept the patient's insurance plan."
+    },
+    {
+      "rule_id": "R5",
+      "description": "A provider not accepting new patients can only be booked by patients who have seen them before."
+    }
+  ],
+
+  "scheduling_policy": {
+    "late_change_window_hours": 24,
+    "late_cancel_note": "Cancellations with less than 24 hours notice may incur a $50 fee.",
+    "follow_ups_stay_with_original_provider": true,
+    "waitlist_available": false,
+    "confirmation_text_requires_consent": true
+  },
+
+  "escalation": {
+    "staffed_hours": "Mon-Fri 8:00-17:00 Central",
+    "nurse_line_phone": "312-555-0111",
+    "after_hours_behavior": "create callback task; no live transfer available",
+    "high_risk_appointment_types": [
+      "post-surgical follow-up",
+      "post-hospital follow-up"
+    ]
+  },
+
+  "referrals_on_file": [
+    {"patient_id": "PAT-2003", "specialty": "Cardiology", "valid_from": "2026-09-01", "valid_until": "2026-11-30"},
+    {"patient_id": "PAT-2005", "specialty": "Dermatology", "valid_from": "2026-10-01", "valid_until": "2026-12-31"},
+    {"patient_id": "PAT-2014", "specialty": "Orthopedics", "valid_from": "2026-08-15", "valid_until": "2026-10-25"}
+  ]
+}
