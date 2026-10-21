@@ -16,8 +16,10 @@ from agent.state_machine import (
     SESSION_TOOL_FUNCTIONS,
     STAGES,
     advance_stage,
+    change_stage,
     tool_schemas_for_stage,
 )
+from agent.safety import GROUNDING_FALLBACK_MESSAGE, check_grounding, check_red_flags
 from agent.tools import ClinicTools
 
 # Change the model here and nowhere else. A small fast model, because these are live spoken turns.
@@ -98,6 +100,7 @@ def new_session() -> dict:
         "slot_id": None,
         "confirmation": None,
         "appointment": None,
+        "escalation_id": None,
         "preference_changed": False,
         "stage_entry_index": 0,
         "messages": [],
@@ -212,6 +215,39 @@ def reply_with_fallback(session: dict) -> str:
     return FALLBACK_REPLY
 
 
+def reply_with_scripted_text(session: dict, scripted_text: str) -> str:
+    """Record a fixed message from safety.py as the assistant's turn, so the message history keeps alternating roles."""
+    session["messages"].append({"role": "assistant", "content": [{"type": "text", "text": scripted_text}]})
+    return scripted_text
+
+
+def move_to_stage(session: dict, new_stage: str, on_stage_change: Optional[Callable[[str, str], None]]) -> None:
+    """Move to a stage on behalf of a safety check, and tell the caller of handle_turn about it."""
+    old_stage = session["stage"]
+    change_stage(session, new_stage, get_clinic_tools())
+    if on_stage_change is not None:
+        on_stage_change(old_stage, new_stage)
+
+
+def create_escalation_record(session: dict, red_flag: dict, user_text: str) -> None:
+    """Call transfer_to_human from code, so a staff record exists before the scripted message promises a human."""
+    reason = f"Red flag, tier {red_flag['tier']}: {red_flag['reason']}"
+    summary = (
+        f"Caller said: {user_text!r}. Stage when it happened: {session['stage']}. "
+        f"Patient id: {session['patient_id']}. Intent: {session['intent']}. "
+        f"Collected so far: {json.dumps(session['collected'])}."
+    )
+    transfer_result = get_clinic_tools().transfer_to_human(reason, summary)
+    session["tool_results"].append(
+        {
+            "tool": "transfer_to_human",
+            "arguments": {"reason": reason, "summary": summary},
+            "result": transfer_result,
+        }
+    )
+    session["escalation_id"] = transfer_result["task_id"]
+
+
 def handle_turn(
     session: dict,
     user_text: str,
@@ -225,6 +261,18 @@ def handle_turn(
     The CLI uses both to show what the agent is doing.
     """
     session["messages"].append({"role": "user", "content": [{"type": "text", "text": user_text}]})
+
+    # Safety first, in every stage including escalate and transfer, and before any model call.
+    red_flag = check_red_flags(user_text)
+    if red_flag is not None:
+        logger.warning("Red flag tier %s (%s) in caller text: %r", red_flag["tier"], red_flag["reason"], user_text)
+        # Already in escalate: say the script again but do not announce a stage change that did not happen.
+        # The record is made before the stage moves, so its summary names the stage the caller was in.
+        create_escalation_record(session, red_flag, user_text)
+        if session["stage"] != "escalate":
+            move_to_stage(session, "escalate", on_stage_change)
+        return reply_with_scripted_text(session, red_flag["message"]), session
+
     client = get_anthropic_client()
     clinic_tools = get_clinic_tools()
 
@@ -233,13 +281,16 @@ def handle_turn(
         if on_stage_change is not None:
             on_stage_change(old_stage, new_stage)
 
+    grounding_retry_used = False
+    correction_note = ""
+
     # A hard cap: a loop that never ends is dead air on a phone call.
     for call_number in range(MAX_MODEL_CALLS_PER_TURN):
         # Prompt and tools are rebuilt from the stage on every call, since a tool result can change the stage.
         response = client.messages.create(
             model=MODEL_NAME,
             max_tokens=MAX_REPLY_TOKENS,
-            system=build_system_prompt(session),
+            system=build_system_prompt(session) + correction_note,
             messages=session["messages"],
             tools=tool_schemas_for_stage(session["stage"]),
         )
@@ -263,7 +314,34 @@ def handle_turn(
                 # The model said nothing. Drop its empty turn and use the fallback instead.
                 session["messages"].pop()
                 return reply_with_fallback(session), session
-            return reply_text, session
+
+            grounding = check_grounding(
+                reply_text,
+                session["tool_results"],
+                clinic_tools.adapter.canonical_locations,
+                describe_current_time(clinic_tools.now_function()),
+            )
+            if grounding["passed"]:
+                return reply_text, session
+
+            logger.warning(
+                "Grounding check failed (rule: %s, span: %r) on reply: %r", grounding["rule"], grounding["span"], reply_text
+            )
+            # The rejected reply must not stay in history, or the model would treat it as something it already said.
+            session["messages"].pop()
+            if not grounding_retry_used:
+                grounding_retry_used = True
+                correction_note = (
+                    f"\nYour previous reply was rejected by a safety check (rule: {grounding['rule']}, "
+                    f"words: {grounding['span']}). Write the reply again using only facts from tool results, "
+                    f"with no medical advice, no guesses about symptoms, and no reassurance."
+                )
+                continue
+
+            # Two failures in a row: stop improvising and hand over. Never downgrade an escalation.
+            if session["stage"] != "escalate" and session["stage"] != "transfer":
+                move_to_stage(session, "transfer", on_stage_change)
+            return reply_with_scripted_text(session, GROUNDING_FALLBACK_MESSAGE), session
 
         tool_result_blocks = []
         for tool_use_block in tool_use_blocks:
