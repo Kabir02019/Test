@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lakeside voice agent: operator view</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0a0c0f;
+    color: #f4f4f4;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 26px;
+    line-height: 1.35;
+  }
+  #bar {
+    height: 52px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 24px;
+    border-bottom: 2px solid #3a3f47;
+    font-size: 22px;
+    color: #b8bec7;
+  }
+  #status.live { color: #4ade80; }
+  #status.off { color: #ff6b6b; }
+  #columns {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1.2fr;
+    height: calc(100vh - 52px);
+  }
+  .column { overflow-y: auto; padding: 20px 24px; border-right: 2px solid #3a3f47; }
+  .column:last-child { border-right: none; }
+  h2 {
+    margin: 0 0 16px 0;
+    font-size: 20px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #b8bec7;
+  }
+
+  /* Left: conversation */
+  .turn { margin-bottom: 22px; padding: 12px 16px; border-left: 8px solid #3a3f47; background: #14171c; }
+  .turn.user { border-left-color: #5ab0ff; }
+  .turn.agent { border-left-color: #ffd23f; }
+  .who { font-size: 18px; letter-spacing: 0.12em; color: #b8bec7; margin-bottom: 4px; }
+  .unsaid { color: #7d848e; text-decoration: line-through; }
+  .cut {
+    display: inline-block;
+    margin: 0 8px;
+    padding: 0 10px;
+    background: #ff4d4d;
+    color: #000;
+    font-weight: 700;
+    font-size: 20px;
+  }
+
+  /* Middle: state */
+  #stage {
+    font-size: 78px;
+    font-weight: 800;
+    line-height: 1.05;
+    color: #ffd23f;
+    margin-bottom: 24px;
+    word-break: break-word;
+  }
+  #stage.alarm { color: #ff5a5a; }
+  #stage-list { list-style: none; padding: 0; margin: 0 0 32px 0; }
+  #stage-list li { padding: 2px 14px; font-size: 28px; color: #9aa1ab; }
+  #stage-list li.current { background: #ffd23f; color: #000; font-weight: 700; }
+  #stage-list li.current.alarm { background: #ff5a5a; }
+  .field { margin-bottom: 14px; }
+  .field .label { font-size: 18px; letter-spacing: 0.12em; text-transform: uppercase; color: #b8bec7; }
+  .field .value { font-size: 34px; font-weight: 600; padding: 0 6px; }
+  .field .value.empty { color: #5d646e; }
+
+  /* Right: activity */
+  #activity { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 20px; }
+  .entry { margin-bottom: 12px; padding: 8px 12px; background: #14171c; border-left: 6px solid #3a3f47; word-break: break-word; }
+  .entry.turnmark { background: none; border-left: none; color: #b8bec7; padding: 4px 0; margin-top: 18px; }
+  .entry.tool { border-left-color: #5ab0ff; }
+  .entry.pass { border-left-color: #4ade80; color: #4ade80; }
+  .entry.flag { border-left-color: #ff4d4d; color: #ff8080; font-weight: 700; }
+  .entry.timing { border-left-color: #c792ea; }
+  .entry .args { color: #cfd5dd; }
+  details summary { cursor: pointer; color: #9fd0ff; margin-top: 4px; }
+  details pre { margin: 6px 0 0 0; white-space: pre-wrap; color: #e6e9ee; font-size: 18px; }
+
+  /* The only animation: a brief highlight when something changes. */
+  @keyframes flash { from { background: #ffd23f; color: #000; } to { background: transparent; } }
+  .flash { animation: flash 1.2s ease-out; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <div>Lakeside Medical Group &middot; voice agent</div>
+  <div id="status" class="off">&#9675; connecting</div>
+</div>
+<div id="columns">
+  <div class="column"><h2>Conversation</h2><div id="conversation"></div></div>
+  <div class="column">
+    <h2>State</h2>
+    <div id="stage">&ndash;</div>
+    <ul id="stage-list"></ul>
+    <div id="fields"></div>
+  </div>
+  <div class="column"><h2>Activity</h2><div id="activity"></div></div>
+</div>
+
+<script>
+const ALARM_STAGES = ["escalate", "transfer"];
+const FIELD_NAMES = ["patient", "specialty", "provider", "slot", "hold"];
+
+const conversationBox = document.getElementById("conversation");
+const activityBox = document.getElementById("activity");
+const stageBox = document.getElementById("stage");
+const stageList = document.getElementById("stage-list");
+const fieldsBox = document.getElementById("fields");
+const statusBox = document.getElementById("status");
+
+let turns = {};
+let providerNames = {};
+let slotLabels = {};
+let patientFirstName = null;
+let fieldValueBoxes = {};
+let fieldTexts = {};
+
+function flash(element) {
+  element.classList.remove("flash");
+  void element.offsetWidth; // restart the animation if it is already running
+  element.classList.add("flash");
+}
+
+function makeElement(tagName, className, text) {
+  const element = document.createElement(tagName);
+  if (className) { element.className = className; }
+  if (text !== undefined) { element.textContent = text; }
+  return element;
+}
+
+function scrollToEnd(column) {
+  column.scrollTop = column.scrollHeight;
+}
+
+function resetPage() {
+  conversationBox.innerHTML = "";
+  activityBox.innerHTML = "";
+  stageList.innerHTML = "";
+  fieldsBox.innerHTML = "";
+  stageBox.textContent = "\u2013";
+  turns = {};
+  providerNames = {};
+  slotLabels = {};
+  patientFirstName = null;
+  fieldValueBoxes = {};
+  fieldTexts = {};
+  for (const name of FIELD_NAMES) {
+    const field = makeElement("div", "field");
+    field.appendChild(makeElement("div", "label", name));
+    const valueBox = makeElement("div", "value empty", "\u2013");
+    field.appendChild(valueBox);
+    fieldsBox.appendChild(field);
+    fieldValueBoxes[name] = valueBox;
+    fieldTexts[name] = "";
+  }
+}
+
+/* ---- state column ---- */
+
+function setStage(stageName, shouldFlash) {
+  stageBox.textContent = stageName;
+  stageBox.classList.toggle("alarm", ALARM_STAGES.includes(stageName));
+  for (const item of stageList.children) {
+    const isCurrent = item.dataset.stage === stageName;
+    item.classList.toggle("current", isCurrent);
+    item.classList.toggle("alarm", isCurrent && ALARM_STAGES.includes(stageName));
+    if (isCurrent && shouldFlash) { flash(item); }
+  }
+  if (shouldFlash) { flash(stageBox); }
+}
+
+function setField(name, text) {
+  const valueBox = fieldValueBoxes[name];
+  const newText = text || "";
+  if (newText === fieldTexts[name]) { return; }
+  fieldTexts[name] = newText;
+  if (newText === "") {
+    valueBox.textContent = "\u2013";
+    valueBox.className = "value empty";
+    return;
+  }
+  valueBox.textContent = newText;
+  valueBox.className = "value";
+  flash(valueBox);
+}
+
+function applyState(state) {
+  if (!state) { return; }
+  let patientText = "";
+  if (state.patient_id) {
+    patientText = state.patient_id;
+    if (patientFirstName) { patientText = patientText + " (" + patientFirstName + ")"; }
+  }
+  setField("patient", patientText);
+  setField("specialty", state.collected.specialty);
+
+  let providerText = "";
+  if (state.collected.provider_id) {
+    providerText = providerNames[state.collected.provider_id] || state.collected.provider_id;
+  }
+  setField("provider", providerText);
+
+  let slotText = "";
+  if (state.slot_id) {
+    slotText = slotLabels[state.slot_id] || state.slot_id;
+  } else if (state.appointment) {
+    slotText = "BOOKED " + state.appointment.spoken_time + " \u00b7 " + state.appointment.location;
+  }
+  setField("slot", slotText);
+  setField("hold", state.hold_id);
+}
+
+/* Pick up names and labels from tool results, so ids can be shown as words. */
+function learnFrom(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) { learnFrom(item); }
+    return;
+  }
+  if (value === null || typeof value !== "object") { return; }
+  if (value.provider_id && (value.name || value.provider_name)) {
+    const name = value.provider_name || ("Dr. " + value.name);
+    providerNames[value.provider_id] = name;
+  }
+  if (value.slot_id && value.spoken_time) {
+    slotLabels[value.slot_id] = value.spoken_time + (value.location ? " \u00b7 " + value.location : "");
+  }
+  if (value.status === "verified" && value.first_name) {
+    patientFirstName = value.first_name;
+  }
+  for (const key of Object.keys(value)) { learnFrom(value[key]); }
+}
+
+/* ---- conversation column ---- */
+
+function addUserTurn(turnNumber, text) {
+  const box = makeElement("div", "turn user");
+  box.appendChild(makeElement("div", "who", "CALLER"));
+  box.appendChild(makeElement("div", "", text));
+  conversationBox.appendChild(box);
+  flash(box);
+  scrollToEnd(conversationBox.parentElement);
+}
+
+function renderAgentTurn(turn) {
+  const textBox = turn.textBox;
+  textBox.innerHTML = "";
+  if (!turn.cut) {
+    textBox.textContent = turn.text;
+    return;
+  }
+  const fullText = turn.text.replace(/\s+/g, " ").trim();
+  const spokenText = (turn.spoken || "").replace(/\s+/g, " ").trim();
+  let saidPart = spokenText;
+  let unsaidPart = "";
+  if (fullText.startsWith(spokenText)) {
+    unsaidPart = fullText.slice(spokenText.length);
+  }
+  textBox.appendChild(makeElement("span", "", saidPart));
+  textBox.appendChild(makeElement("span", "cut", "\u2702 CUT"));
+  textBox.appendChild(makeElement("span", "unsaid", unsaidPart));
+}
+
+function addAgentTurn(turnNumber, text) {
+  const box = makeElement("div", "turn agent");
+  box.appendChild(makeElement("div", "who", "AGENT"));
+  const textBox = makeElement("div", "");
+  box.appendChild(textBox);
+  conversationBox.appendChild(box);
+  turns[turnNumber] = { text: text, textBox: textBox, cut: false, spoken: "" };
+  renderAgentTurn(turns[turnNumber]);
+  flash(box);
+  scrollToEnd(conversationBox.parentElement);
+}
+
+function markCut(turnNumber, spokenText) {
+  const turn = turns[turnNumber];
+  if (!turn) { return; }
+  turn.cut = true;
+  if (spokenText !== undefined) { turn.spoken = spokenText; }
+  renderAgentTurn(turn);
+  flash(turn.textBox);
+}
+
+/* ---- activity column ---- */
+
+function addActivity(entry) {
+  activityBox.appendChild(entry);
+  flash(entry);
+  scrollToEnd(activityBox.parentElement);
+}
+
+function addTurnMark(turnNumber) {
+  addActivity(makeElement("div", "entry turnmark", "\u2500\u2500 turn " + turnNumber + " \u2500\u2500"));
+}
+
+function addToolCall(event) {
+  const entry = makeElement("div", "entry tool");
+  const head = makeElement("div", "");
+  head.appendChild(makeElement("b", "", event.name));
+  head.appendChild(makeElement("span", "args", "(" + JSON.stringify(event.arguments) + ")"));
+  entry.appendChild(head);
+  const details = makeElement("details", "");
+  details.appendChild(makeElement("summary", "", "result"));
+  details.appendChild(makeElement("pre", "", JSON.stringify(event.result, null, 2)));
+  entry.appendChild(details);
+  addActivity(entry);
+}
+
+function addSafety(event) {
+  const isFlag = event.result === "flag";
+  let text = (isFlag ? "\u26a0 " : "\u2713 ") + event.check + " " + event.result;
+  if (event.detail) { text = text + " \u2014 " + event.detail; }
+  addActivity(makeElement("div", "entry " + (isFlag ? "flag" : "pass"), text));
+}
+
+function addTiming(event) {
+  const text = "\u23f1 turn " + event.turn + ": first audio " + event.first_audio_ms + " ms (reply ready at " + event.reply_ms + " ms)";
+  addActivity(makeElement("div", "entry timing", text));
+}
+
+/* ---- events ---- */
+
+function handleEvent(event) {
+  if (event.type === "hello") {
+    resetPage();
+    for (const stageName of event.stages) {
+      const item = makeElement("li", "", stageName);
+      item.dataset.stage = stageName;
+      stageList.appendChild(item);
+    }
+    setStage(event.stages[0], false);
+  } else if (event.type === "transcript") {
+    addTurnMark(event.turn);
+    addUserTurn(event.turn, event.text);
+  } else if (event.type === "reply") {
+    addAgentTurn(event.turn, event.text);
+  } else if (event.type === "stage_change") {
+    learnFrom(event.state);
+    setStage(event.to, true);
+    applyState(event.state);
+  } else if (event.type === "tool_call") {
+    learnFrom(event.result);
+    addToolCall(event);
+    applyState(event.state);
+  } else if (event.type === "safety") {
+    addSafety(event);
+  } else if (event.type === "timing") {
+    addTiming(event);
+  } else if (event.type === "barge_in") {
+    markCut(event.turn, event.spoken);
+  }
+}
+
+function connect() {
+  const socket = new WebSocket("ws://" + location.host + "/ws");
+  socket.onopen = function () {
+    statusBox.textContent = "\u25cf live";
+    statusBox.className = "live";
+  };
+  socket.onmessage = function (message) {
+    handleEvent(JSON.parse(message.data));
+  };
+  socket.onclose = function () {
+    statusBox.textContent = "\u25cb disconnected, retrying";
+    statusBox.className = "off";
+    setTimeout(connect, 2000);
+  };
+}
+
+resetPage();
+connect();
+</script>
+</body>
+</html>

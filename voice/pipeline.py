@@ -13,9 +13,11 @@ Does not hold any scheduling, safety or model logic; agent/ never imports this m
 """
 
 import asyncio
+import logging
 import os
 import sys
 import time
+from typing import Callable
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -27,6 +29,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: E402
 from pipecat.frames.frames import (  # noqa: E402
     BotStartedSpeakingFrame,
     Frame,
+    InterruptionFrame,
     LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -69,6 +72,50 @@ def check_required_env_vars():
         sys.exit(1)
 
 
+def ignore_event(event: dict) -> None:
+    """The default event sink: nothing is listening, so the pipeline runs exactly as it would without an operator view."""
+
+
+def session_state(session: dict) -> dict:
+    """The session fields the operator view shows. Built fresh so a later change cannot alter an event already sent."""
+    return {
+        "stage": session["stage"],
+        "patient_id": session["patient_id"],
+        "collected": dict(session["collected"]),
+        "hold_id": session["hold_id"],
+        "slot_id": session["slot_id"],
+        "appointment": session["appointment"],
+    }
+
+
+class SafetyLogHandler(logging.Handler):
+    """Turns the warnings agent/core.py already logs for red flags and grounding failures into operator events.
+
+    This is how the pipeline sees safety outcomes without agent/ having to report them.
+    """
+
+    def __init__(self, bridge: "AgentBridge"):
+        super().__init__(level=logging.WARNING)
+        self.bridge = bridge
+        self.red_flag_seen = False
+        self.grounding_failures = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Called on the thread that logged, which is the handle_turn worker thread."""
+        if record.msg.startswith("Red flag tier"):
+            tier, reason, caller_text = record.args
+            self.red_flag_seen = True
+            self.bridge.send_event(
+                {"type": "safety", "check": "red_flag", "result": "flag", "detail": f"tier {tier}: {reason}"}
+            )
+        if record.msg.startswith("Grounding check failed"):
+            rule, span, reply_text = record.args
+            self.grounding_failures = self.grounding_failures + 1
+            self.bridge.send_event(
+                {"type": "safety", "check": "grounding", "result": "flag", "detail": f"{rule}: {span}"}
+            )
+
+
 def same_words(first_text: str, second_text: str) -> bool:
     """True if two texts differ only in whitespace."""
     return " ".join(first_text.split()) == " ".join(second_text.split())
@@ -86,21 +133,32 @@ class AgentBridge(FrameProcessor):
     record_spoken_text for how.
     """
 
-    def __init__(self, session: dict):
+    def __init__(self, session: dict, publish_event: Callable[[dict], None] = ignore_event):
         super().__init__()
         self.session = session
+        # Must be thread-safe and must never block: it is called from the handle_turn worker thread too.
+        self.publish_event = publish_event
+        self.current_turn = 0
+        self.safety_log_handler = SafetyLogHandler(self)
+        logging.getLogger("agent.core").addHandler(self.safety_log_handler)
         # One turn at a time: handle_turn mutates the session and must never overlap with itself.
         self.turn_lock = asyncio.Lock()
         self.latest_turn_number = 0
-        # The assistant message we pushed to TTS and have not yet heard the aggregator confirm.
-        self.unconfirmed_reply_message = None
-        self.unconfirmed_reply_text = ""
+        # Replies pushed to TTS that the aggregator has not yet reported on, oldest first. A list, not a
+        # single slot: the caller can start the next turn before the report for the previous reply arrives.
+        # Each entry is {"message": the history message, "text": the reply, "turn": its turn number}.
+        self.awaiting_reports = []
         # Timestamps for the reply being spoken now; the timer logs them when audio starts.
         self.pending_timing = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Turn a finished user turn into a handle_turn call; pass every other frame through."""
         await super().process_frame(frame, direction)
+
+        # An interruption while a reply is still unconfirmed means the caller talked over the agent.
+        if isinstance(frame, InterruptionFrame) and len(self.awaiting_reports) > 0:
+            # The oldest unreported reply is the one that was playing.
+            self.send_event({"type": "barge_in", "turn": self.awaiting_reports[0]["turn"]})
 
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
@@ -123,10 +181,22 @@ class AgentBridge(FrameProcessor):
 
         async with self.turn_lock:
             self.settle_unconfirmed_reply()
+            self.current_turn = turn_number
+            self.send_event({"type": "transcript", "text": user_text})
+            self.safety_log_handler.red_flag_seen = False
+            self.safety_log_handler.grounding_failures = 0
+            escalation_id_before = self.session["escalation_id"]
 
             # handle_turn blocks on network calls; on the event loop it would freeze audio and VAD.
-            reply_text, _ = await asyncio.to_thread(handle_turn, self.session, user_text)
+            reply_text, _ = await asyncio.to_thread(
+                handle_turn,
+                self.session,
+                user_text,
+                on_tool_call=self.report_tool_call,
+                on_stage_change=self.report_stage_change,
+            )
             reply_time = time.monotonic()
+            self.report_turn_outcome(escalation_id_before)
             logger.info("turn {}: reply returned after {:.2f}s: {!r}", turn_number, reply_time - transcript_time, reply_text)
 
             reply_message = self.session["messages"][-1]
@@ -138,34 +208,99 @@ class AgentBridge(FrameProcessor):
                 set_message_text(reply_message, INTERRUPTED_BEFORE_SPEECH_NOTE)
                 return
 
-            self.unconfirmed_reply_message = reply_message
-            self.unconfirmed_reply_text = reply_text
+            self.awaiting_reports.append({"message": reply_message, "text": reply_text, "turn": turn_number})
             self.pending_timing = {"turn": turn_number, "transcript": transcript_time, "reply": reply_time}
+            self.send_event({"type": "reply", "text": reply_text})
 
         await self.push_frame(LLMFullResponseStartFrame())
         await self.push_frame(LLMTextFrame(reply_text))
         await self.push_frame(LLMFullResponseEndFrame())
 
-    def settle_unconfirmed_reply(self) -> None:
-        """If the last reply was never confirmed by the assistant aggregator, none of it was spoken.
+    def send_event(self, event: dict) -> None:
+        """Stamp an event with the turn it belongs to and hand it to the operator view."""
+        if "turn" not in event:
+            event["turn"] = self.current_turn
+        self.publish_event(event)
 
-        The aggregator reports a turn only when at least one sentence finished playing, so a reply
-        interrupted before its first sentence ends produces no report at all.
+    def report_tool_call(self, tool_name: str, arguments: dict, result: dict) -> None:
+        """handle_turn callback, on the worker thread."""
+        self.send_event(
+            {
+                "type": "tool_call",
+                "name": tool_name,
+                "arguments": arguments,
+                "result": result,
+                "state": session_state(self.session),
+            }
+        )
+
+    def report_stage_change(self, old_stage: str, new_stage: str) -> None:
+        """handle_turn callback, on the worker thread."""
+        self.send_event(
+            {"type": "stage_change", "from": old_stage, "to": new_stage, "state": session_state(self.session)}
+        )
+
+    def report_turn_outcome(self, escalation_id_before) -> None:
+        """After handle_turn: report what it did that its callbacks do not, and the safety checks that passed."""
+        if self.session["escalation_id"] != escalation_id_before:
+            # The escalation record is made by code inside handle_turn, so no tool callback fired for it.
+            escalation_entry = self.session["tool_results"][-1]
+            self.send_event(
+                {
+                    "type": "tool_call",
+                    "name": escalation_entry["tool"],
+                    "arguments": escalation_entry["arguments"],
+                    "result": escalation_entry["result"],
+                    "state": session_state(self.session),
+                }
+            )
+        if not self.safety_log_handler.red_flag_seen:
+            self.send_event({"type": "safety", "check": "red_flag", "result": "pass", "detail": ""})
+            if self.safety_log_handler.grounding_failures == 0:
+                self.send_event({"type": "safety", "check": "grounding", "result": "pass", "detail": ""})
+
+    def settle_unconfirmed_reply(self) -> None:
+        """Before a new turn runs, record every reply with no report yet as unheard.
+
+        The aggregator reports a reply only when at least one sentence finished playing, so a reply
+        interrupted before its first sentence ends produces no report at all. The note is tentative:
+        if a report for the reply arrives late, record_spoken_text overwrites it with what was spoken.
         """
-        if self.unconfirmed_reply_message is None:
-            return
-        logger.info("previous reply was never spoken; recording that in the history")
-        set_message_text(self.unconfirmed_reply_message, INTERRUPTED_BEFORE_SPEECH_NOTE)
-        self.unconfirmed_reply_message = None
+        for entry in self.awaiting_reports:
+            logger.info("turn {}: reply has no report yet; recording it as unheard for now", entry["turn"])
+            set_message_text(entry["message"], INTERRUPTED_BEFORE_SPEECH_NOTE)
 
     def record_spoken_text(self, spoken_text: str) -> None:
-        """Called when the assistant aggregator reports what was spoken, whole or cut short by barge-in."""
-        if self.unconfirmed_reply_message is None:
+        """Called when the assistant aggregator reports what was spoken, whole or cut short by barge-in.
+
+        The report names no turn, so it is matched to the oldest awaiting reply that starts with the spoken
+        words. Replies older than the match never got a report, so none of them was heard.
+        """
+        spoken_words = spoken_text.split()
+        if len(spoken_words) == 0:
             return
-        if not same_words(spoken_text, self.unconfirmed_reply_text):
-            logger.info("reply was cut short; history keeps only: {!r}", spoken_text)
-            set_message_text(self.unconfirmed_reply_message, spoken_text + INTERRUPTED_PARTWAY_NOTE)
-        self.unconfirmed_reply_message = None
+        matched_index = None
+        for index in range(len(self.awaiting_reports)):
+            reply_words = self.awaiting_reports[index]["text"].split()
+            if reply_words[: len(spoken_words)] == spoken_words:
+                matched_index = index
+                break
+        if matched_index is None:
+            logger.warning("spoken text matches no awaiting reply: {!r}", spoken_text)
+            return
+
+        for index in range(matched_index):
+            set_message_text(self.awaiting_reports[index]["message"], INTERRUPTED_BEFORE_SPEECH_NOTE)
+
+        matched_entry = self.awaiting_reports[matched_index]
+        if same_words(spoken_text, matched_entry["text"]):
+            # Undo the tentative "unheard" note if the next turn had already started.
+            set_message_text(matched_entry["message"], matched_entry["text"])
+        else:
+            logger.info("turn {}: reply was cut short; history keeps only: {!r}", matched_entry["turn"], spoken_text)
+            self.send_event({"type": "barge_in", "turn": matched_entry["turn"], "spoken": spoken_text})
+            set_message_text(matched_entry["message"], spoken_text + INTERRUPTED_PARTWAY_NOTE)
+        self.awaiting_reports = self.awaiting_reports[matched_index + 1 :]
 
 
 class FirstAudioTimer(FrameProcessor):
@@ -187,6 +322,14 @@ class FirstAudioTimer(FrameProcessor):
             return
         self.bridge.pending_timing = None
         first_audio_time = time.monotonic()
+        self.bridge.send_event(
+            {
+                "type": "timing",
+                "turn": timing["turn"],
+                "reply_ms": round((timing["reply"] - timing["transcript"]) * 1000),
+                "first_audio_ms": round((first_audio_time - timing["transcript"]) * 1000),
+            }
+        )
         logger.info(
             "turn {}: transcript->reply {:.2f}s, reply->first audio {:.2f}s, transcript->first audio {:.2f}s",
             timing["turn"],
@@ -196,7 +339,8 @@ class FirstAudioTimer(FrameProcessor):
         )
 
 
-async def main():
+async def main(publish_event: Callable[[dict], None] = ignore_event):
+    """Run one call. publish_event receives the operator-view events; by default they go nowhere."""
     check_required_env_vars()
 
     transport = LocalAudioTransport(
@@ -217,7 +361,7 @@ async def main():
 
     # One session for the whole call. The agent's own history lives in it, not in pipecat's context.
     session = new_session()
-    bridge = AgentBridge(session)
+    bridge = AgentBridge(session, publish_event)
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(

@@ -332,8 +332,9 @@ STAGES = {
     "greet": {
         "goal": (
             "You are greeting the caller. Welcome them to Lakeside Medical Group in one short sentence and "
-            "find out what they are calling about. As soon as you know, call record_intent: use book if they "
-            "want to make an appointment, and other for anything else."
+            "find out what they are calling about. A greeting such as hello or hi is not a reason for calling, "
+            "so do not call record_intent until the caller has said what they want. Once they have, call "
+            "record_intent: use book if they want to make an appointment, and other for anything else."
         ),
         "allowed_tools": ["record_intent", "transfer_to_human"],
         "exit_check": exit_from_greet,

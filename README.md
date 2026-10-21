@@ -8,6 +8,7 @@ Setup: `pip install "pipecat-ai[deepgram,anthropic,silero,local]==0.0.108"`, the
 
 - Text mode: `.venv/bin/python -m cli` (type `/session` to see the session, `/quit` to leave)
 - Voice mode: `.venv/bin/python -m voice.pipeline` (uses the default microphone and speakers; headphones avoid the agent hearing itself)
+- Voice mode with the operator view: `.venv/bin/python -m web`, then open http://127.0.0.1:8765 (the same call, plus a live page showing the conversation, stage, collected fields and activity)
 - Scenarios: `.venv/bin/python -m tests.scenarios` (makes real Anthropic API calls)
 
 ## Architecture
